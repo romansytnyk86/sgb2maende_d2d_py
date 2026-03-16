@@ -34,6 +34,7 @@ Settings used from deployment.env:
 import logging
 from datetime import datetime
 from config import AppConfig
+from mstrio.server.project import Project
 from mstr import (
     mstr_connection,
     disconnect_users,
@@ -71,6 +72,15 @@ def run(cfg: AppConfig, backup_month: str) -> bool:
     logger.info("=" * 60)
 
     with mstr_connection(cfg.mstr) as conn:
+
+        # Ensure the main project is loaded before starting operations
+        try:
+            proj = Project(conn, name=project)
+            if proj.status != 'loaded':
+                logger.info(f"  Project '{project}' is not loaded. Loading it...")
+                load_project(conn, project)
+        except Exception as exc:
+            logger.warning(f"  Could not check/load project status: {exc} — proceeding anyway")
 
         # ── Step 1: Disconnect users ──────────────────────────────────
         # Kicks all active user sessions off the project so it can be unloaded.
@@ -142,22 +152,24 @@ def run(cfg: AppConfig, backup_month: str) -> bool:
             logger.error("  Aborting workflow due to step failure.")
             return _summary(steps_ok, start)
 
-        # ── Step 7: Revoke security roles from backup project ─────────
-        # Removes all user group access from the backup project so end users
-        # cannot accidentally connect to it.
-        # Pairs to revoke come from REVOKE_ROLE_GROUP_PAIRS in deployment.env.
-        # Equivalent to: REVOKE SECURITY ROLE "..." FROM GROUP "..." FROM PROJECT "..."
-        logger.info("\n[Step 7/7] Revoke security roles from backup project")
-        if not cfg.project.revoke_role_group_pairs:
-            logger.warning("  [WARN] REVOKE_ROLE_GROUP_PAIRS is empty in deployment.env — skipping")
-            steps_ok.append(("Revoke security roles", True))
-        else:
-            all_revoked = True
+    # ── Step 7: Revoke security roles from backup project ─────────
+    # Done outside the main connection context to avoid session timeout issues.
+    # Removes all user group access from the backup project so end users
+    # cannot accidentally connect to it.
+    # Pairs to revoke come from REVOKE_ROLE_GROUP_PAIRS in deployment.env.
+    # Equivalent to: REVOKE SECURITY ROLE "..." FROM GROUP "..." FROM PROJECT "..."
+    logger.info("\n[Step 7/7] Revoke security roles from backup project")
+    if not cfg.project.revoke_role_group_pairs:
+        logger.warning("  [WARN] REVOKE_ROLE_GROUP_PAIRS is empty in deployment.env — skipping")
+        steps_ok.append(("Revoke security roles", True))
+    else:
+        all_revoked = True
+        with mstr_connection(cfg.mstr) as revoke_conn:
             for role_name, group_name in cfg.project.revoke_role_group_pairs:
-                ok = revoke_security_role(conn, role_name, group_name, backup_project)
+                ok = revoke_security_role(revoke_conn, role_name, group_name, backup_project)
                 if not ok:
                     all_revoked = False
-            steps_ok.append(("Revoke security roles", all_revoked))
+        steps_ok.append(("Revoke security roles", all_revoked))
 
     return _summary(steps_ok, start)
 

@@ -39,18 +39,26 @@ def revoke_security_role(
         user_group = UserGroup(conn, name=group_name)
         project = Project(conn, name=project_name)
 
+        # Ensure the connection is set to the correct project
+        conn.project_id = project.id
+
         security_role.revoke_from(members=[user_group], project=project)
 
         logger.info(f"  [OK] Revoked '{role_name}' from '{group_name}'")
         return True
 
     except Exception as exc:
-        logger.error(
-            f"  [ERROR] Failed to revoke '{role_name}' from '{group_name}' "
-            f"in '{project_name}': {exc}"
-        )
-        logger.debug(traceback.format_exc())
-        return False
+        error_msg = str(exc)
+        if "nothing to revoke" in error_msg.lower():
+            logger.info(f"  [OK] '{role_name}' was not granted to '{group_name}' in '{project_name}' — no action needed")
+            return True
+        else:
+            logger.error(
+                f"  [ERROR] Failed to revoke '{role_name}' from '{group_name}' "
+                f"in '{project_name}': {exc}"
+            )
+            logger.debug(f"Exception details: {traceback.format_exc()}")
+            return False
 
 
 def grant_security_role(

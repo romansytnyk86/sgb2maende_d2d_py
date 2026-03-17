@@ -91,7 +91,41 @@ def _poll_duplication(job: ProjectDuplication) -> bool:
     return False
 
 
-def duplicate_project(
+def create_backup_project(
+    conn: Connection,
+    source_project_name: str,
+    target_project_name: str,
+    method: str = "duplicate",
+    description: str = "",
+) -> bool:
+    """
+    Create a backup of a MicroStrategy project using the specified method.
+
+    Currently supports "duplicate". "merge" will be added when available in mstrio.
+
+    Replaces: ProjectDuplicate.exe -f D_SGB_II_MaEnde_D2D.xml ...
+
+    Args:
+        conn:                Active server-level MicroStrategy connection
+        source_project_name: Name of the project to backup
+        target_project_name: Desired name for the backup project
+        method:              "duplicate" (default) or "merge" (future)
+        description:         Optional description for the backup project
+
+    Returns True on success.
+    """
+    if method == "duplicate":
+        return _duplicate_project(conn, source_project_name, target_project_name, description)
+    elif method == "merge":
+        # TODO: Implement merge when mstrio supports it
+        logger.error(f"  [ERROR] Merge method not yet supported in mstrio")
+        return False
+    else:
+        logger.error(f"  [ERROR] Unknown backup method: {method}")
+        return False
+
+
+def _duplicate_project(
     conn: Connection,
     source_project_name: str,
     target_project_name: str,
@@ -99,16 +133,6 @@ def duplicate_project(
 ) -> bool:
     """
     Duplicate a MicroStrategy project (backup step).
-
-    Replaces: ProjectDuplicate.exe -f D_SGB_II_MaEnde_D2D.xml ...
-
-    Args:
-        conn:                Active server-level MicroStrategy connection
-        source_project_name: Name of the project to duplicate
-        target_project_name: Desired name for the backup project
-        description:         Optional description for the backup project
-
-    Returns True on success.
     """
     logger.info(
         f"Duplicating project '{source_project_name}' -> '{target_project_name}'..."

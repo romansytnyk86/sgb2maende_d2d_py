@@ -59,6 +59,14 @@ python main.py mit-backup --backup-month 202512 --dry-run
 python main.py ohne-backup --env /path/to/credentials.env
 ```
 
+## Concurrent Deployments
+
+The tool uses a lock file (`.deployment_lock`) to prevent concurrent deployments on the same server. If you run multiple deployments in parallel (e.g., for different projects), the second one will fail with an error message. Wait for the first deployment to complete before starting the next one.
+
+If a deployment crashes and leaves a stale lock file, you can safely remove `.deployment_lock` manually.
+
+**Note on shared DB connections:** If multiple projects share the same `DB_CONNECTION_NAME`, altering the catalog during deployment may temporarily affect other loaded projects using that connection. To avoid issues, ensure other projects are unloaded or use project-specific DB connections.
+
 ## Project structure
 
 ```

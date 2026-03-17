@@ -1,5 +1,5 @@
 """
-workflows/mit_backup.py - Deployment WITH project backup (nach PD).
+workflows/deployment_with_backup_duplication.py - Deployment WITH project backup duplication (nach PD).
 
 Replaces: BAT_SGB_II_MaEnde_D2D.BAT + CM_SGB_II_MaEnde_nach_PD.scp
           + ProjectDuplicate.exe + D_SGB_II_MaEnde_D2D.xml
@@ -14,10 +14,12 @@ When to use:
     The --backup-month value is appended to BACKUP_PROJECT_BASE_NAME, e.g.:
         "SGB II MaEnde" + "202512" -> "SGB II MaEnde 202512"
 
+Backup method is controlled by BACKUP_METHOD in deployment.env ("duplicate" or "merge").
+
 Steps:
     1. Disconnect all active users from the main project
-    2. Unload the main project
-    3. Duplicate the main project -> creates the backup project
+    2. Create a backup project (duplicate or merge, based on BACKUP_METHOD)
+    3. Unload the main project
     4. Update the DB connection catalog on the main project
     5. Reload the main project
     6. Load the backup project
@@ -39,7 +41,7 @@ from mstr import (
     mstr_connection,
     disconnect_users,
     unload_project,
-    duplicate_project,
+    create_backup_project,
     alter_db_connection_catalog,
     load_project,
     revoke_security_role,
@@ -93,18 +95,19 @@ def run(cfg: AppConfig, backup_month: str) -> bool:
             logger.error("  Aborting workflow due to step failure.")
             return _summary(steps_ok, start)
 
-        # ── Step 2: Duplicate project (create backup) ─────────────────
+        # ── Step 2: Create backup project ─────────────────
         # Creates a full copy of the main project named e.g. "SGB II MaEnde 202512".
         # This is an async server-side operation that is polled until complete.
         # Replaces: ProjectDuplicate.exe + D_SGB_II_MaEnde_D2D.xml
-        logger.info("\n[Step 2/7] Duplicate project (create backup)")
-        ok = duplicate_project(
+        logger.info("\n[Step 2/7] Create backup project")
+        ok = create_backup_project(
             conn,
             source_project_name=project,
             target_project_name=backup_project,
+            method=cfg.project.backup_method,
             description=f"Backup of '{project}' ({backup_month})",
         )
-        steps_ok.append(("Duplicate project (backup)", ok))
+        steps_ok.append(("Create backup project", ok))
         if not ok:
             logger.error("  Aborting workflow due to step failure.")
             return _summary(steps_ok, start)

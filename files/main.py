@@ -28,8 +28,39 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import load_config
 from utils.logger import setup_logger
 from utils.logger import log_run_footer
-import workflows.ohne_backup as workflow_ohne
-import workflows.mit_backup as workflow_mit
+import workflows.deployment_without_backup_none as workflow_ohne
+import workflows.deployment_with_backup_duplication as workflow_mit
+import workflows.deployment_with_backup_merge as workflow_merge
+
+
+LOCK_FILE = ".deployment_lock"
+
+
+def acquire_lock() -> bool:
+    """
+    Create a lock file to prevent concurrent deployments.
+    Returns True if lock acquired, False if already locked.
+    """
+    if os.path.exists(LOCK_FILE):
+        print(f"ERROR: Deployment already in progress (lock file {LOCK_FILE} exists).")
+        print("Wait for the current deployment to complete or remove the lock file if it's stale.")
+        return False
+    try:
+        with open(LOCK_FILE, 'w') as f:
+            f.write(f"Locked at {datetime.now()}\n")
+        return True
+    except Exception as e:
+        print(f"ERROR: Failed to create lock file: {e}")
+        return False
+
+
+def release_lock():
+    """Remove the lock file."""
+    try:
+        if os.path.exists(LOCK_FILE):
+            os.remove(LOCK_FILE)
+    except Exception as e:
+        print(f"WARNING: Failed to remove lock file: {e}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -43,10 +74,12 @@ Examples:
   python main.py ohne-backup --env deployment.local.env
   python main.py mit-backup --backup-month 202512
   python main.py mit-backup --backup-month 202512 --env deployment.customer.env
+  python main.py mit-backup-merge --backup-month 202512  # Future merge feature
 
   # Preview steps without connecting:
   python main.py ohne-backup --dry-run
   python main.py mit-backup --backup-month 202512 --dry-run
+  python main.py mit-backup-merge --backup-month 202512 --dry-run
         """,
     )
 
@@ -97,6 +130,33 @@ Examples:
         help="Print planned steps without connecting to MicroStrategy",
     )
 
+    # ── mit-backup-merge ─────────────────────────────────────────────────────
+    merge = subparsers.add_parser(
+        "mit-backup-merge",
+        help="Deployment WITH project backup via merge (nach PD) - future feature",
+        description=(
+            "Steps: disconnect users -> unload -> merge (backup) -> "
+            "alter DB connection -> load main -> load backup -> revoke security roles"
+        ),
+    )
+    merge.add_argument(
+        "--env",
+        metavar="FILE",
+        default="deployment.env",
+        help="Credentials file (default: deployment.env)",
+    )
+    merge.add_argument(
+        "--backup-month",
+        required=True,
+        metavar="YYYYMM",
+        help="Month suffix for backup project name (e.g. 202512 -> 'SGB II MaEnde 202512')",
+    )
+    merge.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print planned steps without connecting to MicroStrategy",
+    )
+
     return parser
 
 
@@ -138,36 +198,69 @@ def print_dry_run_mit(cfg, backup_month: str) -> None:
     print("-" * 56)
 
 
+def print_dry_run_merge(cfg, backup_month: str) -> None:
+    backup_project = f"{cfg.project.backup_base_name} {backup_month}"
+    print("\n[DRY RUN] mit-backup-merge workflow")
+    print("-" * 56)
+    print(f"  Server:         {cfg.mstr.base_url}")
+    print(f"  User:           {cfg.mstr.username}")
+    print(f"  Project:        {cfg.project.project_name}")
+    print(f"  Backup project: {backup_project}")
+    print()
+    print("  Steps that would be executed:")
+    print(f"    1. Disconnect users from '{cfg.project.project_name}'")
+    print(f"    2. Merge '{cfg.project.project_name}' -> '{backup_project}' (NOT YET IMPLEMENTED)")
+    print(f"    3. Unload '{cfg.project.project_name}'")
+    print(f"    4. Alter DB connection '{cfg.project.db_connection_name}'"
+          f" -> catalog '{cfg.project.db_catalog_name}'")
+    print(f"    5. Load '{cfg.project.project_name}'")
+    print(f"    6. Load '{backup_project}'")
+    for i, (role, group) in enumerate(cfg.project.revoke_role_group_pairs, 7):
+        print(f"    {i}. Revoke '{role}' from '{group}' in '{backup_project}'")
+    print("-" * 56)
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    cfg = load_config(env_file=args.env)
-    logger = setup_logger(cfg.log.log_dir, cfg.log.log_file_name, command=args.command)
+    # Acquire lock to prevent concurrent deployments
+    if not acquire_lock():
+        return 1
 
-    logger.info("")
-    logger.info("#" * 60)
-    logger.info("  SGB II MaEnde - Deployment Tool")
-    logger.info(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info(f"  Command: {args.command}")
-    logger.info(f"  Server:  {cfg.mstr.base_url}")
-    logger.info(f"  Project: {cfg.project.project_name}")
-    logger.info("#" * 60)
+    try:
+        cfg = load_config(env_file=args.env)
+        logger = setup_logger(cfg.log.log_dir, cfg.log.log_file_name, command=args.command)
 
-    if args.dry_run:
+        logger.info("")
+        logger.info("#" * 60)
+        logger.info("  SGB II MaEnde - Deployment Tool")
+        logger.info(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"  Command: {args.command}")
+        logger.info(f"  Server:  {cfg.mstr.base_url}")
+        logger.info(f"  Project: {cfg.project.project_name}")
+        logger.info("#" * 60)
+
+        if args.dry_run:
+            if args.command == "ohne-backup":
+                print_dry_run_ohne(cfg)
+            elif args.command == "mit-backup-merge":
+                print_dry_run_merge(cfg, args.backup_month)
+            else:
+                print_dry_run_mit(cfg, args.backup_month)
+            return 0
+
         if args.command == "ohne-backup":
-            print_dry_run_ohne(cfg)
+            success = workflow_ohne.run(cfg)
+        elif args.command == "mit-backup-merge":
+            success = workflow_merge.run(cfg, backup_month=args.backup_month)
         else:
-            print_dry_run_mit(cfg, args.backup_month)
-        return 0
+            success = workflow_mit.run(cfg, backup_month=args.backup_month)
 
-    if args.command == "ohne-backup":
-        success = workflow_ohne.run(cfg)
-    else:
-        success = workflow_mit.run(cfg, backup_month=args.backup_month)
-
-    log_run_footer(success)
-    return 0 if success else 1
+        log_run_footer(success)
+        return 0 if success else 1
+    finally:
+        release_lock()
 
 
 if __name__ == "__main__":

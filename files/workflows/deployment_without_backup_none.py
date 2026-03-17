@@ -1,5 +1,5 @@
 """
-workflows/ohne_backup.py - Deployment WITHOUT project backup.
+workflows/deployment_without_backup_none.py - Deployment WITHOUT project backup.
 
 Replaces: BAT_SGB_II_MaEnde_D2D_ohne_PD.BAT + CM_SGB_II_MaEnde_ohne_PD.scp
 

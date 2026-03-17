@@ -31,6 +31,7 @@ class ProjectConfig:
     project_name: str
     project_id: Optional[str]
     backup_base_name: str
+    backup_method: str  # "duplicate" or "merge" (when available)
     db_connection_name: str
     db_catalog_name: str
     # List of (role_name, group_name) tuples built from REVOKE_ROLE_GROUP_PAIRS
@@ -125,6 +126,7 @@ def load_config(env_file: str = "deployment.env") -> AppConfig:
         project_name=project_name,
         project_id=v.get("MSTR_PROJECT_ID") or None,
         backup_base_name=v.get("BACKUP_PROJECT_BASE_NAME", project_name),
+        backup_method=v.get("BACKUP_METHOD", "duplicate"),  # Default to "duplicate"
         db_connection_name=_require("DB_CONNECTION_NAME", v.get("DB_CONNECTION_NAME"), env_file),
         db_catalog_name=_require("DB_CATALOG_NAME", v.get("DB_CATALOG_NAME"), env_file),
         revoke_role_group_pairs=_parse_revoke_pairs(v.get("REVOKE_ROLE_GROUP_PAIRS", "")),

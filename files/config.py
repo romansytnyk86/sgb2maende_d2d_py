@@ -51,6 +51,12 @@ class AppConfig:
     mstr: MstrConfig
     project: ProjectConfig
     log: LogConfig
+    target_mstr: Optional[MstrConfig] = None
+    create_backup: bool = False
+    backup_month: str = ""
+    enable_db_catalog_change: bool = True
+    enable_schema_update: bool = False
+    enable_security_role_revocation: bool = True
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -119,6 +125,22 @@ def load_config(env_file: str = "deployment.env") -> AppConfig:
         login_mode=int(v.get("MSTR_LOGIN_MODE", "1")),
     )
 
+    target_base_url = v.get("TARGET_MSTR_BASE_URL", "")
+    target_username = v.get("TARGET_MSTR_USERNAME", "")
+    target_password = v.get("TARGET_MSTR_PASSWORD", "")
+    target_login_mode = int(v.get("TARGET_MSTR_LOGIN_MODE", "1"))
+    target_mstr = None
+    if target_base_url or target_username or target_password:
+        if not (target_base_url and target_username and target_password):
+            print(f"[ERROR] TARGET_MSTR_BASE_URL, TARGET_MSTR_USERNAME, and TARGET_MSTR_PASSWORD must all be set together in {env_file}")
+            sys.exit(1)
+        target_mstr = MstrConfig(
+            base_url=target_base_url,
+            username=target_username,
+            password=target_password,
+            login_mode=target_login_mode,
+        )
+
     # ── Sections 2-5: Project, backup, DB connection, security roles ──
     project_name = _require("MSTR_PROJECT_NAME", v.get("MSTR_PROJECT_NAME"), env_file)
 
@@ -126,7 +148,7 @@ def load_config(env_file: str = "deployment.env") -> AppConfig:
         project_name=project_name,
         project_id=v.get("MSTR_PROJECT_ID") or None,
         backup_base_name=v.get("BACKUP_PROJECT_BASE_NAME", project_name),
-        backup_method=v.get("BACKUP_METHOD", "duplicate"),  # Default to "duplicate"
+        backup_method=v.get("BACKUP_METHOD", "duplicate").lower(),  # Default to "duplicate"
         db_connection_name=_require("DB_CONNECTION_NAME", v.get("DB_CONNECTION_NAME"), env_file),
         db_catalog_name=_require("DB_CATALOG_NAME", v.get("DB_CATALOG_NAME"), env_file),
         revoke_role_group_pairs=_parse_revoke_pairs(v.get("REVOKE_ROLE_GROUP_PAIRS", "")),
@@ -138,4 +160,14 @@ def load_config(env_file: str = "deployment.env") -> AppConfig:
         log_dir=Path(v.get("LOG_DIR", ".")),
     )
 
-    return AppConfig(mstr=mstr, project=project, log=log)
+    return AppConfig(
+        mstr=mstr,
+        project=project,
+        log=log,
+        target_mstr=target_mstr,
+        create_backup=v.get("CREATE_BACKUP", "false").lower() == "true",
+        backup_month=v.get("BACKUP_MONTH", ""),
+        enable_db_catalog_change=v.get("ENABLE_DB_CATALOG_CHANGE", "true").lower() == "true",
+        enable_schema_update=v.get("ENABLE_SCHEMA_UPDATE", "false").lower() == "true",
+        enable_security_role_revocation=v.get("ENABLE_SECURITY_ROLE_REVOCATION", "true").lower() == "true",
+    )

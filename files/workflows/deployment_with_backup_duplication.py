@@ -14,7 +14,7 @@ When to use:
     The --backup-month value is appended to BACKUP_PROJECT_BASE_NAME, e.g.:
         "SGB II MaEnde" + "202512" -> "SGB II MaEnde 202512"
 
-Backup method is controlled by BACKUP_METHOD in deployment.env ("duplicate" or "merge").
+Backup method is controlled by BACKUP_METHOD in deployment.env ("duplicate", "merge", or "package").
 
 Steps:
     1. Disconnect all active users from the main project
@@ -34,9 +34,23 @@ Settings used from deployment.env:
 """
 
 import logging
+import tempfile
 from datetime import datetime
-from config import AppConfig
-from mstrio.server.project import Project
+from pathlib import Path
+from time import sleep
+from typing import Optional
+from config import AppConfig, MstrConfig
+from mstrio.server.project import CrossDuplicationConfig, Project
+from mstrio.object_management import full_search
+from mstrio.object_management.migration import Migration
+from mstrio.object_management.migration.package import (
+    Action,
+    PackageConfig,
+    PackageContentInfo,
+    PackageSettings,
+    PackageType,
+)
+
 from mstr import (
     mstr_connection,
     disconnect_users,
@@ -45,18 +59,20 @@ from mstr import (
     alter_db_connection_catalog,
     load_project,
     revoke_security_role,
+    update_schema,
 )
 
 logger = logging.getLogger("sgb2_maende")
 
 
-def run(cfg: AppConfig, backup_month: str) -> bool:
+def run(cfg: AppConfig, backup_month: str, target_mstr: Optional[MstrConfig] = None) -> bool:
     """
     Execute the with-backup deployment workflow.
 
     Args:
         cfg:          All settings loaded from deployment.env
         backup_month: The month suffix passed via --backup-month (e.g. "202512")
+        target_mstr:  Optional target environment credentials for cross-environment duplication.
 
     Returns True if all steps succeeded, False if any step failed.
     """
@@ -71,7 +87,121 @@ def run(cfg: AppConfig, backup_month: str) -> bool:
     logger.info(f"  Project:        {project}")
     logger.info(f"  Backup project: {backup_project}")
     logger.info(f"  Server:         {cfg.mstr.base_url}")
+    if target_mstr:
+        logger.info(f"  Target server:  {target_mstr.base_url}")
+        logger.info(f"  Target user:    {target_mstr.username}")
     logger.info("=" * 60)
+
+    if target_mstr:
+        with mstr_connection(cfg.mstr) as source_conn, mstr_connection(target_mstr) as target_conn:
+
+            # ── Step 1: Disconnect users on source environment ──────────
+            logger.info("\n[Step 1/5] Disconnect user connections on source environment")
+            ok = disconnect_users(source_conn, project)
+            steps_ok.append(("Disconnect users", ok))
+            if not ok:
+                logger.error("  Aborting workflow due to step failure.")
+                return _summary(steps_ok, start)
+
+            # ── Step 2: Create backup on target environment ───────────────
+            if cfg.project.backup_method == "duplicate":
+                logger.info(f"\n[Step 2/5] Duplicate project from {cfg.mstr.base_url} to {target_mstr.base_url}")
+                try:
+                    source_project = Project(source_conn, name=project)
+                    duplication_config = CrossDuplicationConfig(match_users_by_login=True)
+                    job = source_project.duplicate_to_other_environment(
+                        target_name=backup_project,
+                        target_env=target_conn,
+                        cross_duplication_config=duplication_config,
+                        sync_with_target_env=True,  # Use Storage Service for automatic transfer
+                    )
+                    logger.info(f"  Job ID: {job.id} | Initial status: {job.status}")
+                    job.wait_for_stable_status(timeout=60 * 60)
+                    ok = "COMPLETE" in str(job.status).upper()
+                    if not ok:
+                        logger.error(f"  [ERROR] Cross-environment duplication failed with status {job.status}")
+                    else:
+                        logger.info("  Cross-environment duplication completed successfully.")
+                    
+                    steps_ok.append(("Duplicate to target environment", ok))
+                    if not ok:
+                        logger.error("  Aborting workflow due to step failure.")
+                        return _summary(steps_ok, start)
+                except Exception as exc:
+                    logger.error(f"  [ERROR] Cross-environment duplication failed: {exc}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
+                    steps_ok.append(("Duplicate to target environment", False))
+                    return _summary(steps_ok, start)
+            elif cfg.project.backup_method == "package":
+                logger.info(f"\n[Step 2/5] Create project package from {cfg.mstr.base_url} and migrate to {target_mstr.base_url}")
+                try:
+                    source_project = Project(source_conn, name=project)
+                    # Create project migration
+                    migration = Migration.create(
+                        connection=source_conn,
+                        body={
+                            "packageInfo": {
+                                "name": f"{backup_project} Package",
+                                "type": "object_migration",
+                                "purpose": "object"
+                            }
+                        },
+                        project=source_project
+                    )
+                    logger.info(f"  Created project migration: {migration.id}")
+                    
+                    # Migrate to target environment
+                    logger.info("  Migrating project to target environment...")
+                    ok = migration.migrate(
+                        target_env=target_conn,
+                        target_project_name=backup_project,
+                        generate_undo=False
+                    )
+                    if not ok:
+                        logger.error(f"  [ERROR] Project migration failed.")
+                    else:
+                        logger.info(f"  Project migration completed successfully.")
+
+                    steps_ok.append(("Migrate project package to target environment", ok))
+                    if not ok:
+                        logger.error("  Aborting workflow due to step failure.")
+                        return _summary(steps_ok, start)
+                except Exception as exc:
+                    logger.error(f"  [ERROR] Project package migration failed: {exc}")
+                    import traceback; logger.debug(traceback.format_exc())
+                    steps_ok.append(("Migrate project package to target environment", False))
+                    return _summary(steps_ok, start)
+            else:
+                logger.error(f"  [ERROR] Unsupported BACKUP_METHOD for cross-environment: {cfg.project.backup_method}")
+                steps_ok.append(("Create backup on target environment", False))
+                return _summary(steps_ok, start)
+
+            # ── Step 3: Load backup project on target environment ──────
+            logger.info("\n[Step 3/5] Load backup project on target environment")
+            ok = load_project(target_conn, backup_project)
+            steps_ok.append(("Load backup project on target environment", ok))
+            if not ok:
+                logger.error("  Aborting workflow due to step failure.")
+                return _summary(steps_ok, start)
+
+            # ── Step 4: Revoke security roles on target environment ───
+            logger.info("\n[Step 4/5] Revoke security roles from backup project on target environment")
+            if not cfg.project.revoke_role_group_pairs:
+                logger.warning("  [WARN] REVOKE_ROLE_GROUP_PAIRS is empty in deployment.env — skipping")
+                steps_ok.append(("Revoke security roles", True))
+            else:
+                all_revoked = True
+                for role_name, group_name in cfg.project.revoke_role_group_pairs:
+                    ok = revoke_security_role(target_conn, role_name, group_name, backup_project)
+                    if not ok:
+                        all_revoked = False
+                steps_ok.append(("Revoke security roles", all_revoked))
+                if not all_revoked:
+                    logger.error("  Aborting workflow due to step failure.")
+                    return _summary(steps_ok, start)
+
+        return _summary(steps_ok, start)
 
     with mstr_connection(cfg.mstr) as conn:
 
@@ -99,6 +229,14 @@ def run(cfg: AppConfig, backup_month: str) -> bool:
         # Creates a full copy of the main project named e.g. "SGB II MaEnde 202512".
         # This is an async server-side operation that is polled until complete.
         # Replaces: ProjectDuplicate.exe + D_SGB_II_MaEnde_D2D.xml
+        if cfg.project.backup_method == "package":
+            logger.error(
+                "  [ERROR] BACKUP_METHOD='package' is not supported for same-environment mit-backup."
+                " Use a target environment or set BACKUP_METHOD='duplicate'."
+            )
+            steps_ok.append(("Create backup project", False))
+            return _summary(steps_ok, start)
+
         logger.info("\n[Step 2/7] Create backup project")
         ok = create_backup_project(
             conn,
@@ -125,16 +263,20 @@ def run(cfg: AppConfig, backup_month: str) -> bool:
         # Updates the CATALOG in the datasource connection string on the main project.
         # Equivalent to: ALTER DBCONNECTION "..." CATALOG "..."
         # Values come from DB_CONNECTION_NAME and DB_CATALOG_NAME in deployment.env
-        logger.info("\n[Step 4/7] Alter DB connection catalog")
-        ok = alter_db_connection_catalog(
-            conn,
-            connection_name=cfg.project.db_connection_name,
-            new_catalog=cfg.project.db_catalog_name,
-        )
-        steps_ok.append(("Alter DB connection", ok))
-        if not ok:
-            logger.error("  Aborting workflow due to step failure.")
-            return _summary(steps_ok, start)
+        if cfg.enable_db_catalog_change:
+            logger.info("\n[Step 4/7] Alter DB connection catalog")
+            ok = alter_db_connection_catalog(
+                conn,
+                connection_name=cfg.project.db_connection_name,
+                new_catalog=cfg.project.db_catalog_name,
+            )
+            steps_ok.append(("Alter DB connection", ok))
+            if not ok:
+                logger.error("  Aborting workflow due to step failure.")
+                return _summary(steps_ok, start)
+        else:
+            logger.info("\n[Step 4/7] Skip altering DB connection catalog (disabled in config)")
+            steps_ok.append(("Alter DB connection", True))  # Mark as skipped but successful
 
         # ── Step 5: Load main project ─────────────────────────────────
         # Brings the main project back online for end users.
@@ -148,31 +290,55 @@ def run(cfg: AppConfig, backup_month: str) -> bool:
         # ── Step 6: Load backup project ───────────────────────────────
         # Loads the newly created backup project so security roles can be revoked.
         # After Step 7 it will be inaccessible to regular users.
-        logger.info("\n[Step 6/7] Load backup project")
+        logger.info("\n[Step 6/8] Load backup project")
         ok = load_project(conn, backup_project)
         steps_ok.append(("Load backup project", ok))
         if not ok:
             logger.error("  Aborting workflow due to step failure.")
             return _summary(steps_ok, start)
 
-    # ── Step 7: Revoke security roles from backup project ─────────
+        # ── Step 7: Update schemas ───────────────────────────────────
+        if cfg.enable_schema_update:
+            logger.info("\n[Step 7/8] Update schema for main project")
+            ok = update_schema(conn, cfg.project.project_id)
+            steps_ok.append(("Update schema main", ok))
+            if not ok:
+                logger.error("  Aborting workflow due to step failure.")
+                return _summary(steps_ok, start)
+
+            logger.info("\n[Step 7/8] Update schema for backup project")
+            backup_proj = Project(conn, name=backup_project)
+            ok = update_schema(conn, backup_proj.id)
+            steps_ok.append(("Update schema backup", ok))
+            if not ok:
+                logger.error("  Aborting workflow due to step failure.")
+                return _summary(steps_ok, start)
+        else:
+            logger.info("\n[Step 7/8] Skip schema updates (disabled in config)")
+            steps_ok.append(("Update schemas", True))
+
+    # ── Step 8: Revoke security roles from backup project ─────────
     # Done outside the main connection context to avoid session timeout issues.
     # Removes all user group access from the backup project so end users
     # cannot accidentally connect to it.
     # Pairs to revoke come from REVOKE_ROLE_GROUP_PAIRS in deployment.env.
     # Equivalent to: REVOKE SECURITY ROLE "..." FROM GROUP "..." FROM PROJECT "..."
-    logger.info("\n[Step 7/7] Revoke security roles from backup project")
-    if not cfg.project.revoke_role_group_pairs:
-        logger.warning("  [WARN] REVOKE_ROLE_GROUP_PAIRS is empty in deployment.env — skipping")
-        steps_ok.append(("Revoke security roles", True))
+    if cfg.enable_security_role_revocation:
+        logger.info("\n[Step 8/8] Revoke security roles from backup project")
+        if not cfg.project.revoke_role_group_pairs:
+            logger.warning("  [WARN] REVOKE_ROLE_GROUP_PAIRS is empty in deployment.env — skipping")
+            steps_ok.append(("Revoke security roles", True))
+        else:
+            all_revoked = True
+            with mstr_connection(cfg.mstr) as revoke_conn:
+                for role_name, group_name in cfg.project.revoke_role_group_pairs:
+                    ok = revoke_security_role(revoke_conn, role_name, group_name, backup_project)
+                    if not ok:
+                        all_revoked = False
+            steps_ok.append(("Revoke security roles", all_revoked))
     else:
-        all_revoked = True
-        with mstr_connection(cfg.mstr) as revoke_conn:
-            for role_name, group_name in cfg.project.revoke_role_group_pairs:
-                ok = revoke_security_role(revoke_conn, role_name, group_name, backup_project)
-                if not ok:
-                    all_revoked = False
-        steps_ok.append(("Revoke security roles", all_revoked))
+        logger.info("\n[Step 8/8] Skip revoking security roles (disabled in config)")
+        steps_ok.append(("Revoke security roles", True))
 
     return _summary(steps_ok, start)
 

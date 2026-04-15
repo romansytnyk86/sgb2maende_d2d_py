@@ -30,6 +30,7 @@ from mstr import (
     unload_project,
     alter_db_connection_catalog,
     load_project,
+    update_schema,
 )
 
 logger = logging.getLogger("sgb2_maende")
@@ -78,25 +79,42 @@ def run(cfg: AppConfig) -> bool:
         # Updates the CATALOG in the datasource connection string.
         # Equivalent to: ALTER DBCONNECTION "..." CATALOG "..."
         # Values come from DB_CONNECTION_NAME and DB_CATALOG_NAME in deployment.env
-        logger.info("\n[Step 3/4] Alter DB connection catalog")
-        ok = alter_db_connection_catalog(
-            conn,
-            connection_name=cfg.project.db_connection_name,
-            new_catalog=cfg.project.db_catalog_name,
-        )
-        steps_ok.append(("Alter DB connection", ok))
-        if not ok:
-            logger.error("  Aborting workflow due to step failure.")
-            return False
+        if cfg.enable_db_catalog_change:
+            logger.info("\n[Step 3/4] Alter DB connection catalog")
+            ok = alter_db_connection_catalog(
+                conn,
+                connection_name=cfg.project.db_connection_name,
+                new_catalog=cfg.project.db_catalog_name,
+            )
+            steps_ok.append(("Alter DB connection", ok))
+            if not ok:
+                logger.error("  Aborting workflow due to step failure.")
+                return False
+        else:
+            logger.info("\n[Step 3/4] Skip altering DB connection catalog (disabled in config)")
+            steps_ok.append(("Alter DB connection", True))  # Mark as skipped but successful
 
         # ── Step 4: Load project ──────────────────────────────────────
         # Brings the project back online so users can connect again.
-        logger.info("\n[Step 4/4] Load project")
+        logger.info("\n[Step 4/5] Load project")
         ok = load_project(conn, project)
         steps_ok.append(("Load project", ok))
         if not ok:
             logger.error("  Aborting workflow due to step failure.")
             return False
+
+        # ── Step 5: Update schema ────────────────────────────────────
+        # Runs a full schema update if enabled.
+        if cfg.enable_schema_update:
+            logger.info("\n[Step 5/5] Update schema")
+            ok = update_schema(conn, cfg.project.project_id)
+            steps_ok.append(("Update schema", ok))
+            if not ok:
+                logger.error("  Aborting workflow due to step failure.")
+                return False
+        else:
+            logger.info("\n[Step 5/5] Skip schema update (disabled in config)")
+            steps_ok.append(("Update schema", True))
 
     return _summary(steps_ok, start)
 

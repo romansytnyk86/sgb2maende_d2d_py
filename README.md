@@ -20,7 +20,7 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Edit `deployment.env`:
+Edit `files/deployment.env`:
 
 ```env
 MSTR_BASE_URL=http://your-server:8080/MicroStrategyLibrary
@@ -48,6 +48,22 @@ python main.py ohne-backup
 python main.py mit-backup --backup-month 202512
 ```
 
+### Cross-environment duplication
+```bash
+python main.py mit-backup --backup-month 202512 \
+  --target-base-url http://10.146.13.45:8080/MicroStrategyLibrary/ \
+  --target-username USER --target-password PASS
+```
+
+### Target environment via deployment.env
+You can also configure the target environment directly in `deployment.env` using:
+- `TARGET_MSTR_BASE_URL`
+- `TARGET_MSTR_USERNAME`
+- `TARGET_MSTR_PASSWORD`
+- `TARGET_MSTR_LOGIN_MODE`
+
+If those variables are set, the tool will use the target environment automatically for cross-environment duplication.
+
 ### Preview steps without executing
 ```bash
 python main.py ohne-backup --dry-run
@@ -56,8 +72,20 @@ python main.py mit-backup --backup-month 202512 --dry-run
 
 ### Custom credentials file
 ```bash
-python main.py ohne-backup --env /path/to/credentials.env
+python main.py ohne-backup --env /absolute/path/to/credentials.env
 ```
+
+Relative paths are resolved against the `files/` directory, so `--env deployment.env` will load `files/deployment.env`.
+
+## Workflow Flags
+
+You can control which steps are executed by setting flags in `deployment.env`:
+
+- `ENABLE_DB_CATALOG_CHANGE=true`  # Set to `false` to skip altering the DB connection catalog
+- `ENABLE_SCHEMA_UPDATE=false`     # Set to `true` to run schema updates after loading projects
+- `ENABLE_SECURITY_ROLE_REVOCATION=true`  # Set to `false` to skip revoking roles from backup projects
+
+This allows you to customize the deployment process based on your needs.
 
 ## Concurrent Deployments
 

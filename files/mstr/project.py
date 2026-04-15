@@ -64,8 +64,14 @@ def disconnect_users(conn: Connection, project_name: str) -> bool:
         else:
             # Single server
             uc = UserConnections(conn)
-            uc.disconnect_all_users(force=True)
-            remaining = uc.list_connections()
+            all_nodes = Cluster(connection=conn).list_nodes(to_dictionary=True)
+            node_names = [node.get("name") for node in all_nodes if node.get("name")]
+            if node_names:
+                uc.disconnect_users(nodes=node_names, force=True)
+                remaining = uc.list_connections(nodes=node_names)
+            else:
+                uc.disconnect_all_users(force=True)
+                remaining = uc.list_connections()
             if remaining:
                 logger.warning(f"  {len(remaining)} session(s) could not be disconnected "
                                "(likely admin/service sessions — safe to proceed):")
@@ -106,9 +112,12 @@ def unload_project(conn: Connection, project_name: str) -> bool:
             logger.info(f"  Cluster detected with {len(nodes)} nodes, unloading on all nodes...")
             cluster.unload_project(project_name)
         else:
-            # Single server: use project unload
+            # Single server: check status first
             project = Project(connection=conn, name=project_name)
-            project.unload()
+            if project.status == 'loaded':
+                project.unload()
+            else:
+                logger.info(f"  Project '{project_name}' is already unloaded (status: {project.status})")
         logger.info(f"  [OK] Project '{project_name}' unloaded")
         return True
     except Exception as exc:

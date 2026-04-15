@@ -120,6 +120,9 @@ def create_backup_project(
         # TODO: Implement merge when mstrio supports it
         logger.error(f"  [ERROR] Merge method not yet supported in mstrio")
         return False
+    elif method == "package":
+        logger.error(f"  [ERROR] Package method not supported for same-environment backups (use 'duplicate' or 'merge')")
+        return False
     else:
         logger.error(f"  [ERROR] Unknown backup method: {method}")
         return False

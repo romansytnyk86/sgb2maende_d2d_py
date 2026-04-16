@@ -1,15 +1,15 @@
-# SGB II MaEnde - MicroStrategy Deployment Tool
+# Strategy Deployment Tool
 
-Replaces the original BAT + CommandManager + ProjectDuplicate.exe workflow with pure Python.
+A general-purpose Python tool for deploying Strategy projects with or without backups.
 
 ## What it replaces
 
 | Original file | Replaced by |
 |---|---|
-| `BAT_SGB_II_MaEnde_D2D_ohne_PD.BAT` | `python main.py ohne-backup` |
-| `BAT_SGB_II_MaEnde_D2D.BAT` | `python main.py mit-backup --backup-month YYYYMM` |
-| `CM_SGB_II_MaEnde_ohne_PD.scp` | `workflows/ohne_backup.py` |
-| `CM_SGB_II_MaEnde_nach_PD.scp` | `workflows/mit_backup.py` |
+| `BAT_SGB_II_MaEnde_D2D_ohne_PD.BAT` | `python main.py` (CREATE_BACKUP=false) |
+| `BAT_SGB_II_MaEnde_D2D.BAT` | `python main.py --backup-month YYYYMM` (CREATE_BACKUP=true) |
+| `CM_SGB_II_MaEnde_ohne_PD.scp` | `workflows/deployment_without_backup_none.py` |
+| `CM_SGB_II_MaEnde_nach_PD.scp` | `workflows/deployment_with_backup_duplication.py` |
 | `ProjectDuplicate.exe` + `D_SGB_II_MaEnde_D2D.xml` | `mstr/duplicate.py` |
 
 ## Installation
@@ -28,24 +28,66 @@ MSTR_USERNAME=Administrator
 MSTR_PASSWORD=your_password
 MSTR_LOGIN_MODE=1
 
-MSTR_PROJECT_NAME=SGB II MaEnde
-DB_CONNECTION_NAME=SGB II - MaEnde - MaEnde - MSAS@DST_BICOMSTRSQLSVC
-DB_CATALOG_NAME=SGB2_MaEnde
+MSTR_PROJECT_NAME=Your Project Name
+DB_CONNECTION_NAME=Your DB Connection
+DB_CATALOG_NAME=your_catalog
+
+# Set to true for backup workflow
+CREATE_BACKUP=true
+BACKUP_MONTH=202512
 
 # Role|Group pairs to revoke from backup project (comma-separated)
-REVOKE_ROLE_GROUP_PAIRS=Normale Benutzer|Everyone,Normale Benutzer|SGB II Projektzugriff,Normale Benutzer|SGB II Projektzugriff IT
+REVOKE_ROLE_GROUP_PAIRS=Normal Users|Everyone,Normal Users|Project Access
 ```
 
 ## Usage
 
-### Without backup (replaces `BAT_SGB_II_MaEnde_D2D_ohne_PD.BAT`)
+### Without backup
+Set `CREATE_BACKUP=false` in `deployment.env`, then:
 ```bash
-python main.py ohne-backup
+python main.py
 ```
 
-### With backup (replaces `BAT_SGB_II_MaEnde_D2D.BAT`)
+### With backup
+Set `CREATE_BACKUP=true` in `deployment.env`, then:
 ```bash
-python main.py mit-backup --backup-month 202512
+python main.py --backup-month YYYYMM
+```
+
+### Dry run (preview)
+Add `--dry-run` to any command to see planned steps without executing:
+```bash
+python main.py --dry-run
+python main.py --backup-month 202512 --dry-run
+```
+
+## Features
+
+- **Flexible workflows**: Choose between redeployment only or with project backup
+- **Cross-environment support**: Duplicate projects to different Strategy servers
+- **Security management**: Automatically revoke user access from backup projects
+- **Comprehensive logging**: Detailed logs with timestamps and error tracking
+- **Dry run mode**: Preview all steps before execution
+- **Lock mechanism**: Prevents concurrent deployments
+
+## Project Structure
+
+```
+files/
+├── main.py              # Main entry point
+├── config.py            # Configuration loading
+├── deployment.env       # Environment-specific settings
+├── mstr/                # Strategy API wrappers
+│   ├── connection.py
+│   ├── duplicate.py
+│   ├── project.py
+│   └── ...
+├── utils/               # Utilities
+│   ├── logger.py
+│   └── ...
+└── workflows/           # Deployment workflows
+    ├── deployment_without_backup_none.py
+    └── deployment_with_backup_duplication.py
 ```
 
 ### Cross-environment duplication

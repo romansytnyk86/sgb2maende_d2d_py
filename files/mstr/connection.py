@@ -1,8 +1,8 @@
 """
-mstr/connection.py - MicroStrategy connection factory.
+mstr/connection.py - Strategy connection factory.
 
 Provides a reusable context manager that opens and cleanly closes
-a MicroStrategy connection. Used by all workflow steps.
+a Strategy connection. Used by all workflow steps.
 """
 
 import logging
@@ -19,7 +19,7 @@ logger = logging.getLogger("sgb2_maende")
 @contextmanager
 def mstr_connection(cfg: MstrConfig, project_name: Optional[str] = None):
     """
-    Context manager that opens a MicroStrategy connection and closes it on exit.
+    Context manager that opens a Strategy connection and closes it on exit.
 
     Logs connection open/close at DEBUG level (visible in log file, not console).
     Any error during close is logged as a warning rather than raised, so it

@@ -58,5 +58,5 @@ AppData/
 *.tmp
 *.temp
 
-# MicroStrategy deployment logs
+# Strategy deployment logs
 LOG_*.txt

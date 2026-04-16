@@ -35,12 +35,13 @@ Settings used from deployment.env:
 
 import logging
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from time import sleep
 from typing import Optional
 from config import AppConfig, MstrConfig
-from mstrio.server.project import CrossDuplicationConfig, Project
+from mstrio.server.project import CrossDuplicationConfig, Project, ProjectDuplication
 from mstrio.object_management import full_search
 from mstrio.object_management.migration import Migration
 from mstrio.object_management.migration.package import (
@@ -63,6 +64,55 @@ from mstr import (
 )
 
 logger = logging.getLogger("sgb2_maende")
+
+_CROSS_ENV_POLL_INTERVAL_S = 30
+_CROSS_ENV_MAX_RETRIES = 5
+
+
+def _poll_cross_env_duplication(job: ProjectDuplication, timeout_min: int = 60) -> bool:
+    """
+    Poll a cross-environment duplication job until completion.
+
+    `wait_for_stable_status()` loses the source session during cross-env ops
+    and raises ERR001. This replacement tolerates transient fetch failures.
+    """
+    timeout_s = timeout_min * 60
+    start = time.time()
+    consecutive_errors = 0
+
+    logger.info(f"  Polling job {job.id} (timeout: {timeout_min} min, retry-tolerant)...")
+
+    while time.time() - start < timeout_s:
+        try:
+            job.fetch()
+            consecutive_errors = 0
+        except Exception as exc:
+            consecutive_errors += 1
+            logger.warning(f"    [WARN] Status fetch failed ({consecutive_errors}/{_CROSS_ENV_MAX_RETRIES}): {exc}")
+            if consecutive_errors >= _CROSS_ENV_MAX_RETRIES:
+                logger.error("  [ERROR] Too many consecutive fetch failures — aborting poll")
+                return False
+            time.sleep(_CROSS_ENV_POLL_INTERVAL_S)
+            continue
+
+        elapsed = int(time.time() - start)
+        status_str = str(job.status).upper()
+        progress = getattr(job, "progress", None)
+        progress_s = f" | {progress}%" if progress is not None else ""
+        logger.info(f"    [{elapsed:>4}s] {job.status}{progress_s}")
+
+        if "COMPLETE" in status_str:
+            logger.info(f"  Cross-environment duplication completed successfully after {elapsed}s")
+            return True
+        if "FAILED" in status_str or "CANCEL" in status_str:
+            msg = getattr(job, "message", "")
+            logger.error(f"  [ERROR] Duplication ended: {job.status}" + (f" | {msg}" if msg else ""))
+            return False
+
+        time.sleep(_CROSS_ENV_POLL_INTERVAL_S)
+
+    logger.error(f"  [ERROR] Timeout after {timeout_min} minutes")
+    return False
 
 
 def run(cfg: AppConfig, backup_month: str, target_mstr: Optional[MstrConfig] = None) -> bool:
@@ -108,27 +158,30 @@ def run(cfg: AppConfig, backup_month: str, target_mstr: Optional[MstrConfig] = N
                 logger.info(f"\n[Step 2/5] Duplicate project from {cfg.mstr.base_url} to {target_mstr.base_url}")
                 try:
                     source_project = Project(source_conn, name=project)
-                    duplication_config = CrossDuplicationConfig(match_users_by_login=True)
+                    duplication_config = CrossDuplicationConfig(
+                        match_users_by_login=cfg.project.duplicate_match_users_by_login
+                    )
                     job = source_project.duplicate_to_other_environment(
                         target_name=backup_project,
                         target_env=target_conn,
                         cross_duplication_config=duplication_config,
-                        sync_with_target_env=True,  # Use Storage Service for automatic transfer
+                        sync_with_target_env=cfg.project.duplicate_sync_with_target_environment,
                     )
                     logger.info(f"  Job ID: {job.id} | Initial status: {job.status}")
-                    job.wait_for_stable_status(timeout=60 * 60)
-                    ok = "COMPLETE" in str(job.status).upper()
-                    if not ok:
-                        logger.error(f"  [ERROR] Cross-environment duplication failed with status {job.status}")
-                    else:
-                        logger.info("  Cross-environment duplication completed successfully.")
+                    ok = _poll_cross_env_duplication(job)
                     
                     steps_ok.append(("Duplicate to target environment", ok))
                     if not ok:
                         logger.error("  Aborting workflow due to step failure.")
                         return _summary(steps_ok, start)
                 except Exception as exc:
+                    error_str = str(exc)
                     logger.error(f"  [ERROR] Cross-environment duplication failed: {exc}")
+                    if "ERR001" in error_str and "duplication status" in error_str.lower():
+                        logger.error("")
+                        logger.error("  [DIAGNOSTIC] StorageService is likely not configured between the two environments.")
+                        logger.error("  To fix: configure a shared Storage Service location on both source and target")
+                        logger.error("  environments (Administration > Storage Service > Settings), then re-run.")
                     import traceback
                     logger.debug(traceback.format_exc())
                     steps_ok.append(("Duplicate to target environment", False))
@@ -252,9 +305,11 @@ def run(cfg: AppConfig, backup_month: str, target_mstr: Optional[MstrConfig] = N
 
         # ── Step 3: Unload main project ───────────────────────────────
         # Takes the project offline. Required before updating the DB connection.
-        logger.info("\n[Step 3/7] Unload main project")
-        ok = unload_project(conn, project)
-        steps_ok.append(("Unload project", ok))
+        logger.info("\n[Step 3/7] Unload main and backup projects")
+        ok_main = unload_project(conn, project)
+        ok_backup = unload_project(conn, backup_project)
+        ok = ok_main and ok_backup
+        steps_ok.append(("Unload main and backup projects", ok))
         if not ok:
             logger.error("  Aborting workflow due to step failure.")
             return _summary(steps_ok, start)

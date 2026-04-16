@@ -23,7 +23,7 @@ def update_schema(conn: Connection, project_id: str) -> bool:
         RECALOBJECTCACHE FOR PROJECT "..."
 
     Args:
-        conn:       Active MicroStrategy connection scoped to the project
+        conn:       Active Strategy connection scoped to the project
         project_id: MSTR project ID (required by SchemaManagement)
 
     Returns True on success.

@@ -1,5 +1,5 @@
 """
-mstr/duplicate.py - Duplicate a MicroStrategy project (backup step).
+mstr/duplicate.py - Duplicate a Strategy project (backup step).
 
 Replaces ProjectDuplicate.exe / D_SGB_II_MaEnde_D2D.xml.
 
@@ -99,14 +99,14 @@ def create_backup_project(
     description: str = "",
 ) -> bool:
     """
-    Create a backup of a MicroStrategy project using the specified method.
+    Create a backup of a Strategy project using the specified method.
 
     Currently supports "duplicate". "merge" will be added when available in mstrio.
 
     Replaces: ProjectDuplicate.exe -f D_SGB_II_MaEnde_D2D.xml ...
 
     Args:
-        conn:                Active server-level MicroStrategy connection
+        conn:                Active server-level Strategy connection
         source_project_name: Name of the project to backup
         target_project_name: Desired name for the backup project
         method:              "duplicate" (default) or "merge" (future)
@@ -135,7 +135,7 @@ def _duplicate_project(
     description: str = "",
 ) -> bool:
     """
-    Duplicate a MicroStrategy project (backup step).
+    Duplicate a Strategy project (backup step).
     """
     logger.info(
         f"Duplicating project '{source_project_name}' -> '{target_project_name}'..."

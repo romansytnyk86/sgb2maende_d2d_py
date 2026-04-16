@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-main.py - SGB II MaEnde deployment CLI.
+main.py - Strategy Deployment Tool.
 
-Replaces the two BAT scripts + cmdmgr + ProjectDuplicate.exe.
+A general-purpose tool for deploying Strategy projects with or without backups.
 
 Workflow is controlled by CREATE_BACKUP flag in deployment.env:
-- CREATE_BACKUP=false: ohne-backup (no backup)
-- CREATE_BACKUP=true:  mit-backup (with backup)
+- CREATE_BACKUP=false: Deployment without backup
+- CREATE_BACKUP=true:  Deployment with backup
 
 Usage
 -----
@@ -26,9 +26,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import load_config, MstrConfig
 from utils.logger import setup_logger
 from utils.logger import log_run_footer
-import workflows.deployment_without_backup_none as workflow_ohne
-import workflows.deployment_with_backup_duplication as workflow_mit
-import workflows.deployment_with_backup_merge as workflow_merge
+import workflows.deploy_without_backup as workflow_ohne
+import workflows.deploy_with_backup_duplicate as workflow_mit
+import workflows.deploy_with_backup_merge as workflow_merge
 
 
 LOCK_FILE = ".deployment_lock"
@@ -64,7 +64,7 @@ def release_lock():
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="sgb2_maende",
-        description="SGB II MaEnde - MicroStrategy deployment tool",
+        description="Strategy deployment tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -89,7 +89,7 @@ Examples:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print planned steps without connecting to MicroStrategy",
+        help="Print planned steps without connecting to Strategy",
     )
     parser.add_argument(
         "--backup-month",
@@ -181,42 +181,43 @@ def print_dry_run_mit(cfg, backup_month: str, target_mstr: Optional[MstrConfig] 
         else:
             print(f"    2. Duplicate '{cfg.project.project_name}' -> '{backup_project}'")
             print(f"    3. Unload '{cfg.project.project_name}'")
+            print(f"    4. Unload '{backup_project}'")
         if cfg.enable_db_catalog_change:
-            print(f"    4. Alter DB connection '{cfg.project.db_connection_name}' -> catalog '{cfg.project.db_catalog_name}'")
-            print(f"    5. Load '{cfg.project.project_name}'")
-            print(f"    6. Load '{backup_project}'")
+            print(f"    5. Alter DB connection '{cfg.project.db_connection_name}' -> catalog '{cfg.project.db_catalog_name}'")
+            print(f"    6. Load '{cfg.project.project_name}'")
+            print(f"    7. Load '{backup_project}'")
             if cfg.enable_schema_update:
-                print(f"    7. Update schemas for '{cfg.project.project_name}' and '{backup_project}'")
+                print(f"    8. Update schemas for '{cfg.project.project_name}' and '{backup_project}'")
                 if cfg.enable_security_role_revocation and cfg.project.revoke_role_group_pairs:
-                    for i, (role, group) in enumerate(cfg.project.revoke_role_group_pairs, 8):
+                    for i, (role, group) in enumerate(cfg.project.revoke_role_group_pairs, 9):
                         print(f"    {i}. Revoke '{role}' from '{group}' in '{backup_project}'")
                 else:
-                    print("    8. Skip revoking security roles (disabled in config)")
+                    print("    9. Skip revoking security roles (disabled in config)")
             else:
-                print("    7. Skip schema updates (disabled in config)")
+                print("    8. Skip schema updates (disabled in config)")
                 if cfg.enable_security_role_revocation and cfg.project.revoke_role_group_pairs:
-                    for i, (role, group) in enumerate(cfg.project.revoke_role_group_pairs, 8):
+                    for i, (role, group) in enumerate(cfg.project.revoke_role_group_pairs, 9):
                         print(f"    {i}. Revoke '{role}' from '{group}' in '{backup_project}'")
                 else:
-                    print("    8. Skip revoking security roles (disabled in config)")
+                    print("    9. Skip revoking security roles (disabled in config)")
         else:
-            print("    4. Skip altering DB connection catalog (disabled in config)")
-            print(f"    5. Load '{cfg.project.project_name}'")
-            print(f"    6. Load '{backup_project}'")
+            print("    5. Skip altering DB connection catalog (disabled in config)")
+            print(f"    6. Load '{cfg.project.project_name}'")
+            print(f"    7. Load '{backup_project}'")
             if cfg.enable_schema_update:
-                print(f"    7. Update schemas for '{cfg.project.project_name}' and '{backup_project}'")
+                print(f"    8. Update schemas for '{cfg.project.project_name}' and '{backup_project}'")
                 if cfg.enable_security_role_revocation and cfg.project.revoke_role_group_pairs:
-                    for i, (role, group) in enumerate(cfg.project.revoke_role_group_pairs, 8):
+                    for i, (role, group) in enumerate(cfg.project.revoke_role_group_pairs, 9):
                         print(f"    {i}. Revoke '{role}' from '{group}' in '{backup_project}'")
                 else:
-                    print("    8. Skip revoking security roles (disabled in config)")
+                    print("    9. Skip revoking security roles (disabled in config)")
             else:
-                print("    7. Skip schema updates (disabled in config)")
+                print("    8. Skip schema updates (disabled in config)")
                 if cfg.enable_security_role_revocation and cfg.project.revoke_role_group_pairs:
-                    for i, (role, group) in enumerate(cfg.project.revoke_role_group_pairs, 8):
+                    for i, (role, group) in enumerate(cfg.project.revoke_role_group_pairs, 9):
                         print(f"    {i}. Revoke '{role}' from '{group}' in '{backup_project}'")
                 else:
-                    print("    8. Skip revoking security roles (disabled in config)")
+                    print("    9. Skip revoking security roles (disabled in config)")
     print("-" * 56)
 
 
@@ -296,7 +297,7 @@ def main() -> int:
 
         logger.info("")
         logger.info("#" * 60)
-        logger.info("  SGB II MaEnde - Deployment Tool")
+        logger.info("  Strategy Deployment Tool")
         logger.info(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"  Workflow: {command}")
         logger.info(f"  Server:   {cfg.mstr.base_url}")

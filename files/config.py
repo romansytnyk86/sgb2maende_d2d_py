@@ -18,7 +18,7 @@ from dotenv import dotenv_values
 
 @dataclass
 class MstrConfig:
-    """Holds the MicroStrategy server connection details (Section 1)."""
+    """Holds the Strategy server connection details (Section 1)."""
     base_url: str
     username: str
     password: str
@@ -34,6 +34,13 @@ class ProjectConfig:
     backup_method: str  # "duplicate" or "merge" (when available)
     db_connection_name: str
     db_catalog_name: str
+    # Legacy parity options for duplication behavior.
+    duplicate_match_users_by_login: bool = False
+    duplicate_use_same_identifier_as_source_project: bool = False
+    duplicate_copy_project_related_objects: bool = True
+    duplicate_copy_schema_related_objects_only: bool = False
+    duplicate_copy_users_mode: str = "copy_no_users"
+    duplicate_sync_with_target_environment: bool = True
     # List of (role_name, group_name) tuples built from REVOKE_ROLE_GROUP_PAIRS
     revoke_role_group_pairs: list[tuple[str, str]] = field(default_factory=list)
 
@@ -87,6 +94,18 @@ def _parse_revoke_pairs(raw: str) -> list[tuple[str, str]]:
         role, group = entry.split("|", 1)
         pairs.append((role.strip(), group.strip()))
     return pairs
+
+
+def _parse_bool(raw: Optional[str], default: bool) -> bool:
+    """Parse common truthy/falsy env values with a fallback default."""
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
 
 
 # ── Public loader ─────────────────────────────────────────────────────────────
@@ -151,6 +170,20 @@ def load_config(env_file: str = "deployment.env") -> AppConfig:
         backup_method=v.get("BACKUP_METHOD", "duplicate").lower(),  # Default to "duplicate"
         db_connection_name=_require("DB_CONNECTION_NAME", v.get("DB_CONNECTION_NAME"), env_file),
         db_catalog_name=_require("DB_CATALOG_NAME", v.get("DB_CATALOG_NAME"), env_file),
+        duplicate_match_users_by_login=_parse_bool(v.get("DUPLICATE_MATCH_USERS_BY_LOGIN"), False),
+        duplicate_use_same_identifier_as_source_project=_parse_bool(
+            v.get("DUPLICATE_USE_SAME_IDENTIFIER_AS_SOURCE_PROJECT"), False
+        ),
+        duplicate_copy_project_related_objects=_parse_bool(
+            v.get("DUPLICATE_COPY_PROJECT_RELATED_OBJECTS"), True
+        ),
+        duplicate_copy_schema_related_objects_only=_parse_bool(
+            v.get("DUPLICATE_COPY_SCHEMA_RELATED_OBJECTS_ONLY"), False
+        ),
+        duplicate_copy_users_mode=(v.get("DUPLICATE_COPY_USERS_MODE", "copy_no_users") or "copy_no_users").strip().lower(),
+        duplicate_sync_with_target_environment=_parse_bool(
+            v.get("DUPLICATE_SYNC_WITH_TARGET_ENVIRONMENT"), True
+        ),
         revoke_role_group_pairs=_parse_revoke_pairs(v.get("REVOKE_ROLE_GROUP_PAIRS", "")),
     )
 
